@@ -300,6 +300,18 @@ jobs:
           grep -E '^(CONFIG_(DXGKRNL|HYPERV|ARCH_SUPPORTS_ACPI|EFI|EFI_STUB|ANDROID_BINDER_IPC|ARM64_4K_PAGES|DRM|KVM|MODULE_SIG|MODULE_COMPRESS|DEBUG_INFO|IKCONFIG))=' "$SRC/.config" || true
           grep -E '^# CONFIG_(MODULE_SIG_ALL|MODULE_SIG_FORCE|MODULE_SIG_KEY|MODULE_COMPRESS) is not set' "$SRC/.config" || true
 
+      # 快速探针：只编「微软补丁补出来的」几个对象。缺头文件这类问题会在
+      # 3 分钟内暴露，而不是等 make -j 排队编到那一块才炸（曾白跑 50 分钟）
+      - name: Smoke-compile Hyper-V arm64 objects
+        run: |
+          set -Eeuo pipefail
+          SRC="$GITHUB_WORKSPACE/linux-$KVER"
+          cd "$SRC"
+          make -j"$JOBS" ARCH=arm64 \
+            drivers/clocksource/hyperv_timer.o \
+            drivers/hv/dxgkrnl/dxgmodule.o \
+            arch/arm64/kernel/setup.o
+
       - name: Build Debian packages
         run: |
           set -Eeuo pipefail

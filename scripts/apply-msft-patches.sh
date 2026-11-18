@@ -33,6 +33,12 @@ COPY_PATHS=(
   # arm64：上游已有同名文件，逐文件比对后只会补真正改过的
   arch/arm64/hyperv
   arch/arm64/include/asm/mshyperv.h
+  # Hyper-V 定时器与早期初始化：上游 6.18 的 arm64 支持是半成品，
+  # 微软在这三处补了 arm64 实现（Kconfig 里 HYPERV_TIMER 是 def_bool HYPERV，
+  # 没有 prompt，配置层面关不掉，只能连实现一起搬）
+  arch/arm64/include/asm/hyperv_timer.h
+  drivers/clocksource/hyperv_timer.c
+  arch/arm64/kernel/setup.c
   # 故意不搬：arch/arm64/Makefile（微软的链接/编译开关与本仓库无关）、
   #           arch/x86/*（编 arm64 完全不参与，只会污染 delta）
 )
@@ -129,6 +135,14 @@ grep -q 'DXGKRNL' "$SRC/drivers/hv/Makefile" || { echo "::error::drivers/hv/Make
 grep -q 'dxgkrnl' "$SRC/drivers/hv/Kconfig" || { echo "::error::drivers/hv/Kconfig 未 source dxgkrnl/Kconfig"; exit 1; }
 [[ -f "$SRC/include/uapi/misc/d3dkmthk.h" ]] || { echo "::error::缺 d3dkmthk.h"; exit 1; }
 grep -q 'dxgsyncfile' "$SRC/drivers/hv/dxgkrnl/Makefile" || echo "::warning::dxgkrnl/Makefile 里未见 dxgsyncfile.o"
+
+# arm64 Hyper-V 的那三处补齐：缺任何一个都会在编译或运行期安静地出事
+[[ -f "$SRC/arch/arm64/include/asm/hyperv_timer.h" ]] || {
+  echo "::error::缺 arch/arm64/include/asm/hyperv_timer.h（上游没有，必须从微软树搬）"; exit 1; }
+grep -q 'CONFIG_ARM64' "$SRC/drivers/clocksource/hyperv_timer.c" || {
+  echo "::error::drivers/clocksource/hyperv_timer.c 还是上游版本（没有 arm64 分支）"; exit 1; }
+grep -q 'hyperv_early_init' "$SRC/arch/arm64/kernel/setup.c" || {
+  echo "::error::arch/arm64/kernel/setup.c 没有调用 hyperv_early_init()"; exit 1; }
 
 # 上游 6.18 起 HYPERV 已支持 ARM64；若 tag 里又退回 X86-only，这里要能看见
 if awk '/^config HYPERV$/{f=1;next} /^config [A-Z]/{f=0} f&&/depends on/' \
