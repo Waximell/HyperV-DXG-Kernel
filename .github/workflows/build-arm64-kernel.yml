@@ -354,7 +354,11 @@ jobs:
           # bindeb-pkg 把 .deb 放在**源码树的父目录**。源码树是 $BUILD_ROOT/linux-$KVER
           # （symlink 回 workspace），父目录就是 $BUILD_ROOT 而不是 workspace——
           # 以前只在当前目录 glob，源码树落在 /mnt 时一个都收不到。
-          mapfile -t ALL < <(ls -1 "$BUILD_ROOT"/*.deb "$GITHUB_WORKSPACE"/*.deb 2>/dev/null || true)
+          # 两个 glob 会命中同一批文件（源码树是 symlink），按 realpath 去重
+          mapfile -t ALL < <(
+            { ls -1 "$BUILD_ROOT"/*.deb "$GITHUB_WORKSPACE"/*.deb 2>/dev/null || true; } \
+              | xargs -r realpath -m 2>/dev/null | sort -u
+          )
           if (( ${#ALL[@]} == 0 )); then
             echo "::error::$BUILD_ROOT 与 $GITHUB_WORKSPACE 下都没有 .deb 产物"
             find "$BUILD_ROOT" -maxdepth 3 -name '*.deb' || true
@@ -381,9 +385,15 @@ jobs:
             exit 1
           fi
           # 内建 =y 时不会有 dxgkrnl.ko，改为验证随包发布的 .config
-          CFG=$(dpkg-deb -c "$IMG" | awk '/\/boot\/config-/ {print $NF; exit}')
+          # 一次解包，把文件清单和 fsys tar 落到本地文件，后面全部从文件里读。
+          # 以前写的是 `dpkg-deb -c "$IMG" | awk '{...; exit}'`：awk 一 exit 就关管道，
+          # dpkg-deb 内层 tar 还在写 → `tar: stdout: write error` → 配合 pipefail 直接判失败。
+          # 产物本身没问题，是断言把自己绊倒的。
+          dpkg-deb --fsys-tarfile "$IMG" > /tmp/img.tar
+          tar -tf /tmp/img.tar > /tmp/fslist.txt
+          CFG=$(grep -E '/boot/config-' /tmp/fslist.txt | head -n1 || true)
           [[ -n "$CFG" ]] || { echo "::error::镜像包里没有 /boot/config-*"; exit 1; }
-          dpkg-deb --fsys-tarfile "$IMG" | tar -xO "$CFG" > /tmp/packed.config
+          tar -xOf /tmp/img.tar "$CFG" > /tmp/packed.config
           grep -qx 'CONFIG_DXGKRNL=y' /tmp/packed.config
           grep -qx 'CONFIG_HYPERV=y' /tmp/packed.config
           grep -qx 'CONFIG_ARM64_4K_PAGES=y' /tmp/packed.config
@@ -395,9 +405,9 @@ jobs:
           # 随便抽一个 .ko，签名者必须为空（已签的 .ko 无法再叠加签名）
           # 只抽第一个 .ko：tar -xO 配通配符会把**所有**模块拼进同一个文件，
           # modinfo 面对这种拼接体读不出可信结果，断言就成了摆设。
-          KOPATH=$(dpkg-deb --fsys-tarfile "$IMG" | tar -t | grep -m1 '\.ko$' || true)
+          KOPATH=$(grep -m1 '\.ko$' /tmp/fslist.txt || true)
           if [[ -n "$KOPATH" ]]; then
-            dpkg-deb --fsys-tarfile "$IMG" | tar -xO "$KOPATH" > /tmp/probe.ko
+            tar -xOf /tmp/img.tar "$KOPATH" > /tmp/probe.ko
             SIGNER=$(modinfo -F signer /tmp/probe.ko 2>/dev/null || true)
             if [[ -n "$SIGNER" ]]; then
               echo "::error::模块在构建期就被签名了（signer=$SIGNER），本地无法再补签"
