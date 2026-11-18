@@ -1,0 +1,10 @@
+name: probe
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+jobs:
+  t:
+    runs-on: ubuntu-26.04-arm
+    steps:
+      - run: echo hi
