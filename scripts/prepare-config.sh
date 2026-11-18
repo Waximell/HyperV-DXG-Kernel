@@ -89,8 +89,8 @@ check CONFIG_MODULE_SIG 'CONFIG_MODULE_SIG=y'
 check_unset CONFIG_MODULE_SIG_ALL
 check_unset CONFIG_MODULE_SIG_FORCE
 check_unset CONFIG_MODULE_COMPRESS
-check_unset CONFIG_MODULE_COMPRESS_XZ
-check_unset CONFIG_MODULE_COMPRESS_ZSTD
+# 子选项 GZIP/XZ/ZSTD 不必断言：父开关为 n 时它们不可见，olddefconfig 会直接删掉整行，
+# 连 "# ... is not set" 都不会留下，硬断言只会误报。
 
 echo "==> 报告：基线符号在 6.18.58 里被丢弃/改写的部分"
 dropped=$(comm -23 \
