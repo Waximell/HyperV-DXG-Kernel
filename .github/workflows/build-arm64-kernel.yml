@@ -298,7 +298,7 @@ jobs:
           cp "$SRC/.config" "$GITHUB_WORKSPACE/out/kernel.config"
           echo "--- key configs ---"
           grep -E '^(CONFIG_(DXGKRNL|HYPERV|ARCH_SUPPORTS_ACPI|EFI|EFI_STUB|ANDROID_BINDER_IPC|ARM64_4K_PAGES|DRM|KVM|MODULE_SIG|MODULE_COMPRESS|DEBUG_INFO|IKCONFIG))=' "$SRC/.config" || true
-          grep -E '^# CONFIG_(MODULE_SIG_ALL|MODULE_SIG_FORCE|MODULE_SIG_KEY) is not set' "$SRC/.config" || true
+          grep -E '^# CONFIG_(MODULE_SIG_ALL|MODULE_SIG_FORCE|MODULE_SIG_KEY|MODULE_COMPRESS) is not set' "$SRC/.config" || true
 
       - name: Build Debian packages
         run: |

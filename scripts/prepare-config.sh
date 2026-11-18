@@ -28,7 +28,7 @@ baseline_keys=$(grep -oE '^(CONFIG_[A-Za-z0-9_]+)' "$DEBCFG" | sort -u | wc -l)
 #   MODULE_SIG=y      → 保留模块签名机制（否则本地签了也没用）
 #   MODULE_SIG_ALL=n  → 构建期**不要**用临时钥把模块签死（签死后无法叠加本地签名）
 #   MODULE_SIG_FORCE=n→ 未签模块仍可加载
-#   MODULE_COMPRESS_NONE → .ko 不压缩，本地 sign-file 可直接处理
+#   MODULE_COMPRESS 关掉 → .ko 不压缩，本地 sign-file 可直接处理
 cat >> .config <<'EOF'
 CONFIG_SYSTEM_TRUSTED_KEYS=""
 CONFIG_SYSTEM_REVOCATION_KEYS=""
@@ -37,9 +37,10 @@ CONFIG_LOCALVERSION=""
 CONFIG_MODULE_SIG=y
 # CONFIG_MODULE_SIG_ALL is not set
 # CONFIG_MODULE_SIG_FORCE is not set
-# MODULE_COMPRESS 是个 choice 组：只写 NONE=y 而基线里还留着 XZ=y 时，
-# olddefconfig 会按文件中最后出现的那个符号定案，结果不确定。四个都显式写。
-CONFIG_MODULE_COMPRESS_NONE=y
+# 6.18 的 Kconfig 里**没有**「不压缩」这种 choice 选项（MODULE_COMPRESS_NONE 早被删了）：
+# MODULE_COMPRESS 是父 bool，关掉它就是「不压缩」。XZ/GZIP/ZSTD 一并显式关，
+# 免得基线里残留的 MODULE_COMPRESS_XZ=y 让 choice 又被选中。
+# CONFIG_MODULE_COMPRESS is not set
 # CONFIG_MODULE_COMPRESS_GZIP is not set
 # CONFIG_MODULE_COMPRESS_XZ is not set
 # CONFIG_MODULE_COMPRESS_ZSTD is not set
@@ -87,7 +88,7 @@ check CONFIG_ARM64_4K_PAGES 'CONFIG_ARM64_4K_PAGES=y'
 check CONFIG_MODULE_SIG 'CONFIG_MODULE_SIG=y'
 check_unset CONFIG_MODULE_SIG_ALL
 check_unset CONFIG_MODULE_SIG_FORCE
-check CONFIG_MODULE_COMPRESS_NONE 'CONFIG_MODULE_COMPRESS_NONE=y'
+check_unset CONFIG_MODULE_COMPRESS
 check_unset CONFIG_MODULE_COMPRESS_XZ
 check_unset CONFIG_MODULE_COMPRESS_ZSTD
 
