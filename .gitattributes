@@ -1,0 +1,7 @@
+# 仓库在 Linux (GitHub Actions) 上被消费，脚本若带 CRLF 会直接执行失败。
+* text=auto eol=lf
+
+# 基线 config 与其 sha256 必须逐字节保持原样：CI 里要用 sha256sum -c 校验，
+# 任何换行符转换都会让校验失败，所以标记为 binary（不做任何转换）。
+*.config -text
+*.sha256 -text

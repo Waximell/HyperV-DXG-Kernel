@@ -1,0 +1,13 @@
+out/
+*.deb
+*.tar.xz
+*.patch
+linux-*/
+msft/
+msft.tar.gz
+sha256sums.asc
+expected.sha256
+uapi/
+*baseline.config
+.ccache/
+.tmp/
