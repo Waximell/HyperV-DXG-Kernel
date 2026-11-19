@@ -418,7 +418,9 @@ jobs:
             echo "::warning::没抽到 .ko，跳过「未签名」断言"
           fi
           test -f "$GITHUB_WORKSPACE/linux-$KVER/arch/arm64/boot/Image"
-          ( cd "$GITHUB_WORKSPACE/out" && sha256sum ./*.deb ./*.tar.xz > SHA256SUMS && cat SHA256SUMS )
+          # 附件里有什么就校验什么：kernel.config 与 msft-delta.patch 也是发布资产，
+          # 只 glob *.deb/*.tar.xz 会让这两份「看得见但验不了」。
+          ( cd "$GITHUB_WORKSPACE/out" && sha256sum ./*.deb ./*.tar.xz ./kernel.config ./msft-delta.patch > SHA256SUMS && cat SHA256SUMS )
           ls -lh "$GITHUB_WORKSPACE/out"
 
       # Release note 只放这一张表。产物在附件里、安装说明在 README 里，这里不重复。
