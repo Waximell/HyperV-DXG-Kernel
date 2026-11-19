@@ -2,12 +2,12 @@
 # 用法: prepare-config.sh <内核树> <仓库根> <基线 config 文件>
 #
 # 基线只有一个：仓库里钉死的 Debian 6.18 系列 amd64 内核 config
-# （config/X64/debian-6.18.15-amd64.config，来自 trixie-backports 的
+# （config/AMD64/debian-6.18.15-amd64.config，来自 trixie-backports 的
 #   linux-image-6.18.15+deb13-amd64_6.18.15-1~bpo13+1_amd64.deb 里的 /boot/config-*）。
 # 构建时不再联网抓 config —— Debian testing 现在是 7.3，抓来的 config 与 6.18.58
 # 跨了 5 个次版本，olddefconfig 会把 Debian 特意设的 =m 大面积默认化。
 #
-# 流程：基线 → 强制关掉/打开的几项 → 叠加 config/X64/*.fragment → olddefconfig 收敛
+# 流程：基线 → 强制关掉/打开的几项 → 叠加 config/AMD64/*.fragment → olddefconfig 收敛
 #       → 断言 + 量化报告（丢了多少基线符号、fragment 有哪几项没生效）。
 set -Eeuo pipefail
 
@@ -51,7 +51,7 @@ CONFIG_MODULES=y
 EOF
 
 shopt -s nullglob
-for f in "$REPO"/config/X64/*.fragment; do
+for f in "$REPO"/config/AMD64/*.fragment; do
   echo "==> 叠加 $(basename "$f")"
   cat "$f" >> .config
 done
@@ -107,7 +107,7 @@ fi
 
 echo "==> 报告：未生效的 fragment 项"
 uneff=0
-for f in "$REPO"/config/X64/*.fragment; do
+for f in "$REPO"/config/AMD64/*.fragment; do
   while IFS= read -r line; do
     case "$line" in
       '#'*|'') continue ;;

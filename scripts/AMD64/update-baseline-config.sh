@@ -7,8 +7,8 @@
 # 拆分包，只能从内核镜像包里抽 /boot/config-*。
 #
 # 用法:
-#   scripts/X64/update-baseline-config.sh [输出路径]
-#   scripts/X64/update-baseline-config.sh --deb=/path/to/linux-image-*.deb [输出路径]
+#   scripts/AMD64/update-baseline-config.sh [输出路径]
+#   scripts/AMD64/update-baseline-config.sh --deb=/path/to/linux-image-*.deb [输出路径]
 #
 # 一次下载约 160 MB（linux-image-6.18.15+deb13-amd64，比 arm64 那份大一倍）。
 # 只想校验已有快照就别跑它。
@@ -29,7 +29,7 @@ for arg in "$@"; do
     *) OUT="$arg" ;;
   esac
 done
-OUT="${OUT:-config/X64/debian-6.18.15-amd64.config}"
+OUT="${OUT:-config/AMD64/debian-6.18.15-amd64.config}"
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO"
@@ -72,4 +72,4 @@ echo "    $(wc -l < "$OUT") 行 / $(grep -c '^CONFIG_' "$OUT") 个 CONFIG 项"
 echo "    $(cat "$OUT.sha256")"
 echo
 echo "提交前自查：基线里若有 MODULE_SIG_ALL=y，prepare-config.sh 会把它关掉；"
-echo "x86 的 MTRR/X86_PAT 由 config/X64/full-vm.fragment 保证打开。"
+echo "x86 的 MTRR/X86_PAT 由 config/AMD64/full-vm.fragment 保证打开。"

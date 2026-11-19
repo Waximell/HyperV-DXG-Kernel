@@ -1,4 +1,4 @@
-name: Build Kernel + dxgkrnl (X64 Debian .deb)
+name: Build Kernel + dxgkrnl (AMD64 Debian .deb)
 
 # 基线是 kernel.org 的稳定版内核，不是 WSL 内核整树。
 # 配置基线是仓库里钉死的 Debian 官方 amd64 config（取自 trixie-backports，构建时不联网）。
@@ -10,7 +10,7 @@ name: Build Kernel + dxgkrnl (X64 Debian .deb)
 #   vars.BASELINE_CONFIG  基线 config 路径
 #   vars.BASELINE_LABEL   基线 config 的展示名（会进 Release note）
 #   vars.RUNNER           runner label（默认 ubuntu-26.04）
-#   vars.ARCH_LABEL       Release 标题里的架构后缀（默认 X64）
+#   vars.ARCH_LABEL       Release 标题里的架构后缀（默认 AMD64）
 # 巨硬发新版时只改这几个变量，不必改这个文件。
 #
 # 从 WSL 树里只取 Hyper-V 侧真正需要的路径：
@@ -23,7 +23,7 @@ name: Build Kernel + dxgkrnl (X64 Debian .deb)
 # 产物：标准 x86_64 内核（bzImage）的 linux-image / linux-headers deb + uapi 头文件包，
 #       **完全未签名**（可本地用 MOK 补签；构建期 MODULE_SIG_ALL 关闭）。
 #
-# Runner: 固定 ubuntu-26.04（2026-09-17 GA，x64 免费、比 arm64 更容易排队），
+# Runner: 固定 ubuntu-26.04（2026-09-17 GA，amd64 免费、比 arm64 更容易排队），
 # 原生 x86_64、不交叉编译，工具链是 Ubuntu 26.04 的 GCC 15.2 / LLVM 21。
 # 公开仓库 4 vCPU / 16 GB / 14 GB SSD，免费不计分钟；单 job 上限 6h。
 # CI 专属优化：自适应 -j、ccache、优先用 /mnt 第二块盘、TMPDIR 落磁盘、
@@ -43,7 +43,7 @@ on:
       baseline_config:
         description: '仓库内的 Debian 基线 config（改基线只改这个文件）'
         required: true
-        default: 'config/X64/debian-6.18.15-amd64.config'
+        default: 'config/AMD64/debian-6.18.15-amd64.config'
       toolchain:
         description: '编译工具链（26.04: GCC 15.2 / LLVM 21 + lld）'
         required: true
@@ -78,17 +78,17 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ${{ vars.X64_RUNNER || 'ubuntu-26.04' }}
+    runs-on: ${{ vars.AMD64_RUNNER || 'ubuntu-26.04' }}
     timeout-minutes: 360
     env:
       # KVER / WSL_VERSION / TOOLCHAIN_LABEL 不在这里：它们由 WSL_TAG 与实测工具链
       # 在「Derive versions」步推导后写进 $GITHUB_ENV（见该步）。
       WSL_TAG: ${{ inputs.wsl_tag || vars.WSL_TAG || 'linux-msft-wsl-6.18.58.1' }}
       LOCALVERSION: ${{ inputs.localversion || vars.LOCALVERSION || '-hyperv-dxg' }}
-      BASELINE_CONFIG: ${{ inputs.baseline_config || vars.X64_BASELINE_CONFIG || 'config/X64/debian-6.18.15-amd64.config' }}
+      BASELINE_CONFIG: ${{ inputs.baseline_config || vars.AMD64_BASELINE_CONFIG || 'config/AMD64/debian-6.18.15-amd64.config' }}
       BASELINE_LABEL: ${{ vars.BASELINE_LABEL || 'Debian 6.18.15 amd64（trixie-backports）' }}
-      ARCH_LABEL: ${{ vars.X64_ARCH_LABEL || 'X64' }}
-      RUNNER_LABEL: ${{ vars.X64_RUNNER || 'ubuntu-26.04' }}
+      ARCH_LABEL: ${{ vars.AMD64_ARCH_LABEL || 'AMD64' }}
+      RUNNER_LABEL: ${{ vars.AMD64_RUNNER || 'ubuntu-26.04' }}
       TOOLCHAIN: ${{ inputs.toolchain || 'gcc' }}
       EXTRA_MSFT_PATHS: ${{ inputs.extra_msft_paths || '' }}
       KDEB_COMPRESS: zstd
@@ -282,7 +282,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           SRC="$GITHUB_WORKSPACE/linux-$KVER"
-          bash "$GITHUB_WORKSPACE/scripts/X64/apply-msft-patches.sh" \
+          bash "$GITHUB_WORKSPACE/scripts/AMD64/apply-msft-patches.sh" \
             "$SRC" "$GITHUB_WORKSPACE/msft" "$GITHUB_WORKSPACE/msft-delta.patch"
           cp "$GITHUB_WORKSPACE/msft-delta.patch" "$GITHUB_WORKSPACE/out/"
           echo "--- delta stat ---"
@@ -294,7 +294,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           SRC="$GITHUB_WORKSPACE/linux-$KVER"
-          bash "$GITHUB_WORKSPACE/scripts/X64/prepare-config.sh" \
+          bash "$GITHUB_WORKSPACE/scripts/AMD64/prepare-config.sh" \
             "$SRC" "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/debian-baseline.config" \
             2>&1 | tee "$GITHUB_WORKSPACE/out/config-report.txt"
           cp "$SRC/.config" "$GITHUB_WORKSPACE/out/kernel.config"

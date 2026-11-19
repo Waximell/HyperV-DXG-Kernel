@@ -129,9 +129,14 @@ grep -q 'dxgkrnl' "$SRC/drivers/hv/Kconfig" || { echo "::error::drivers/hv/Kconf
 [[ -f "$SRC/include/uapi/misc/d3dkmthk.h" ]] || { echo "::error::缺 d3dkmthk.h"; exit 1; }
 grep -q 'dxgsyncfile' "$SRC/drivers/hv/dxgkrnl/Makefile" || echo "::warning::dxgkrnl/Makefile 里未见 dxgsyncfile.o"
 
-# x86 侧被微软改过的两个文件必须真的换成了微软版本（否则是「安静地少搬」）
-grep -q 'hyperv_early_init' "$SRC/arch/x86/kernel/cpu/mshyperv.c" || {
-  echo "::error::arch/x86/kernel/cpu/mshyperv.c 里没有 hyperv_early_init（可能仍是上游版本）"; exit 1; }
+# x86 侧被微软改过的两个文件必须真的换成了微软版本（否则是「安静地少搬」）。
+# 微软在 x86 mshyperv.c 里只加了一处：老宿主（build < 22621）的 invariant-TSC bug
+# 规避——把 HV_ACCESS_TSC_INVARIANT 从 features 里摘掉。这行是上游没有的，
+# 拿它当指纹比拿函数名可靠（arm64 才有的 hyperv_early_init 在 x86 根本不存在）。
+grep -q 'ms_hyperv.features &= ~HV_ACCESS_TSC_INVARIANT' "$SRC/arch/x86/kernel/cpu/mshyperv.c" || {
+  echo "::error::arch/x86/kernel/cpu/mshyperv.c 里没有 TSC-invariant 规避补丁（可能仍是上游版本）"; exit 1; }
+grep -q '22621' "$SRC/arch/x86/kernel/cpu/mshyperv.c" || {
+  echo "::error::arch/x86/kernel/cpu/mshyperv.c 里没有 build < 22621 的判断"; exit 1; }
 
 echo "==> 未纳入白名单的差异（仅提示，需人工判断）"
 uncovered=0
