@@ -1,6 +1,6 @@
 # HyperV-DXG-Kernel
 
-尝试给普通 Hyper-V 来宾 Linux 虚拟机引入 WSL2 的 GPU-PV 能力，本仓库面向普通 Debian、Ubuntu 发行版：config 取自 `linux-image-6.18.15+deb13-x64`、`linux-image-6.18.15+deb13-arm64`，合入 `6.18.58.1-microsoft-standard-WSL2` 中 Hyper-V 相关的部分。具体工作、修改、kconfig、workflow 由 AI（DeepSeek-V4.1-Flash）执行，如果介意请绕行。
+尝试给普通 Hyper-V 来宾 Linux 虚拟机引入 WSL2 的 GPU-PV 能力，本仓库面向普通 Debian、Ubuntu 发行版：config 取自 `linux-image-6.18.15+deb13-amd64`、`linux-image-6.18.15+deb13-arm64`，合入 `6.18.58.1-microsoft-standard-WSL2` 中 Hyper-V 相关的部分。具体工作、修改、kconfig、workflow 由 AI（DeepSeek-V4.1-Flash）执行，如果介意请绕行。
 
 ## 
 
