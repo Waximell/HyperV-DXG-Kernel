@@ -7,17 +7,18 @@
 # 拆分包，只能从内核镜像包里抽 /boot/config-*。
 #
 # 用法:
-#   scripts/update-baseline-config.sh [输出路径]
-#   scripts/update-baseline-config.sh --deb=/path/to/linux-image-*.deb [输出路径]
+#   scripts/X64/update-baseline-config.sh [输出路径]
+#   scripts/X64/update-baseline-config.sh --deb=/path/to/linux-image-*.deb [输出路径]
 #
-# 一次下载约 92 MB（linux-image-6.18.15+deb13-arm64）。只想校验已有快照就别跑它。
+# 一次下载约 160 MB（linux-image-6.18.15+deb13-amd64，比 arm64 那份大一倍）。
+# 只想校验已有快照就别跑它。
 set -Eeuo pipefail
 
 MIRROR="${MIRROR:-https://deb.debian.org/debian}"
-POOL="main/l/linux-signed-arm64"
-PKG="linux-image-6.18.15+deb13-arm64"
+POOL="main/l/linux-signed-amd64"
+PKG="linux-image-6.18.15+deb13-amd64"
 VER="6.18.15-1~bpo13+1"
-DEB_URL="$MIRROR/pool/$POOL/${PKG}_${VER}_arm64.deb"
+DEB_URL="$MIRROR/pool/$POOL/${PKG}_${VER}_amd64.deb"
 
 LOCAL_DEB=""
 OUT=""
@@ -28,9 +29,9 @@ for arg in "$@"; do
     *) OUT="$arg" ;;
   esac
 done
-OUT="${OUT:-config/debian-6.18.15-arm64.config}"
+OUT="${OUT:-config/X64/debian-6.18.15-amd64.config}"
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO"
 
 TMP="$(mktemp -d)"
@@ -58,7 +59,8 @@ cfg=$(ls "$TMP"/root/boot/config-* 2>/dev/null | head -n1 || true)
 
 mkdir -p "$(dirname "$OUT")"
 cp "$cfg" "$OUT"
-grep -q '^CONFIG_ARM64=y' "$OUT" || { echo "::error::抽出来的不是 arm64 config"; exit 1; }
+grep -q '^CONFIG_X86_64=y' "$OUT" || { echo "::error::抽出来的不是 x86_64 config"; exit 1; }
+grep -q '^CONFIG_ARM64=y' "$OUT" && { echo "::error::这是 arm64 的 config，选错了 deb"; exit 1; }
 
 # sha256 文件里的路径必须相对仓库根，CI 里才能直接 sha256sum -c；
 # 用 realpath 归一，避免传绝对路径时把 /home/xxx/... 写进 .sha256
@@ -70,4 +72,4 @@ echo "    $(wc -l < "$OUT") 行 / $(grep -c '^CONFIG_' "$OUT") 个 CONFIG 项"
 echo "    $(cat "$OUT.sha256")"
 echo
 echo "提交前自查：基线里若有 MODULE_SIG_ALL=y，prepare-config.sh 会把它关掉；"
-echo "arm64 上 16K/64K pages 的项会被 CONFIG_ARM64_4K_PAGES 覆盖。"
+echo "x86 的 MTRR/X86_PAT 由 config/X64/full-vm.fragment 保证打开。"

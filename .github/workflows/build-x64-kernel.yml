@@ -1,0 +1,531 @@
+name: Build Kernel + dxgkrnl (X64 Debian .deb)
+
+# 基线是 kernel.org 的稳定版内核，不是 WSL 内核整树。
+# 配置基线是仓库里钉死的 Debian 官方 amd64 config（取自 trixie-backports，构建时不联网）。
+#
+# 所有会随上游漂移的坐标都来自「仓库变量（Settings > Variables）+ 手动输入」，
+# 不写死在 YAML 里：
+#   vars.WSL_TAG          微软 tag；内核版本号由它推导
+#                         （linux-msft-wsl-6.18.58.1 -> WSL_VERSION 6.18.58.1 / KVER 6.18.58）
+#   vars.BASELINE_CONFIG  基线 config 路径
+#   vars.BASELINE_LABEL   基线 config 的展示名（会进 Release note）
+#   vars.RUNNER           runner label（默认 ubuntu-26.04）
+#   vars.ARCH_LABEL       Release 标题里的架构后缀（默认 X64）
+# 巨硬发新版时只改这几个变量，不必改这个文件。
+#
+# 从 WSL 树里只取 Hyper-V 侧真正需要的路径：
+#   drivers/hv（dxgkrnl 本体 + Kconfig/Makefile 接线 + hv-rescind-race 修复）
+#   include/uapi/misc/d3dkmthk.h、include/linux/hyperv.h 里的 DXGK GUID
+#   微软在 x86 上另改了两个文件：arch/x86/kernel/cpu/mshyperv.c 与
+#   drivers/clocksource/hyperv_timer.c（x86 上游本来就完整，不需要补架构层）
+# 注意：x86 的 Hyper-V 上游本来就是完整的，这里仍只做「逐文件比对、有差异才搬」，
+#       不会把上游新代码覆盖成微软旧版。
+# 产物：标准 x86_64 内核（bzImage）的 linux-image / linux-headers deb + uapi 头文件包，
+#       **完全未签名**（可本地用 MOK 补签；构建期 MODULE_SIG_ALL 关闭）。
+#
+# Runner: 固定 ubuntu-26.04（2026-09-17 GA，x64 免费、比 arm64 更容易排队），
+# 原生 x86_64、不交叉编译，工具链是 Ubuntu 26.04 的 GCC 15.2 / LLVM 21。
+# 公开仓库 4 vCPU / 16 GB / 14 GB SSD，免费不计分钟；单 job 上限 6h。
+# CI 专属优化：自适应 -j、ccache、优先用 /mnt 第二块盘、TMPDIR 落磁盘、
+# skipdbg + 关 DEBUG_INFO、always 诊断步、concurrency。
+
+on:
+  workflow_dispatch:
+    inputs:
+      wsl_tag:
+        description: '微软 WSL2-Linux-Kernel 的 tag（内核版本号由它推导，别填 kernel.org 版本）'
+        required: true
+        default: 'linux-msft-wsl-6.18.58.1'
+      localversion:
+        description: '内核版本后缀'
+        required: true
+        default: '-hyperv-dxg'
+      baseline_config:
+        description: '仓库内的 Debian 基线 config（改基线只改这个文件）'
+        required: true
+        default: 'config/X64/debian-6.18.15-amd64.config'
+      toolchain:
+        description: '编译工具链（26.04: GCC 15.2 / LLVM 21 + lld）'
+        required: true
+        type: choice
+        options:
+          - gcc
+          - clang
+        default: 'gcc'
+      extra_msft_paths:
+        description: '额外要从 WSL 树带入的路径，逗号分隔'
+        required: false
+        default: ''
+      make_release:
+        description: '本次构建直接建 tag + Release（推 tag 触发时忽略此项）'
+        required: true
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+        default: 'false'
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+# 手滑连点两次 Run workflow 时，取消旧的那次，别占满并发
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ${{ vars.X64_RUNNER || 'ubuntu-26.04' }}
+    timeout-minutes: 360
+    env:
+      # KVER / WSL_VERSION / TOOLCHAIN_LABEL 不在这里：它们由 WSL_TAG 与实测工具链
+      # 在「Derive versions」步推导后写进 $GITHUB_ENV（见该步）。
+      WSL_TAG: ${{ inputs.wsl_tag || vars.WSL_TAG || 'linux-msft-wsl-6.18.58.1' }}
+      LOCALVERSION: ${{ inputs.localversion || vars.LOCALVERSION || '-hyperv-dxg' }}
+      BASELINE_CONFIG: ${{ inputs.baseline_config || vars.X64_BASELINE_CONFIG || 'config/X64/debian-6.18.15-amd64.config' }}
+      BASELINE_LABEL: ${{ vars.BASELINE_LABEL || 'Debian 6.18.15 amd64（trixie-backports）' }}
+      ARCH_LABEL: ${{ vars.X64_ARCH_LABEL || 'X64' }}
+      RUNNER_LABEL: ${{ vars.X64_RUNNER || 'ubuntu-26.04' }}
+      TOOLCHAIN: ${{ inputs.toolchain || 'gcc' }}
+      EXTRA_MSFT_PATHS: ${{ inputs.extra_msft_paths || '' }}
+      KDEB_COMPRESS: zstd
+      KDEB_PKGVERSION: '1'
+      ARCH: x86_64
+      # 固定时间戳，避免 __DATE__/__TIME__ 让 ccache 全 miss
+      KBUILD_BUILD_TIMESTAMP: '1970-01-01'
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 2G
+      CCACHE_COMPILERCHECK: content
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: 'true'
+      # file_macro: 源码树落在 /mnt 时 __FILE__ 绝对路径会变，别让它打穿命中率
+      CCACHE_SLOPPINESS: time_macros,pch_defines,include_file_mtime,locale,file_stat_matches,file_macro
+      CCACHE_COMPRESS: 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 官方只保证 14GB 可用：镜像里 Android SDK / hostedtoolcache / GHC 占大头。
+      # 别整删 $AGENT_TOOLSDIRECTORY，会破坏后续 setup-* 步骤。
+      - name: Free disk space
+        run: |
+          set -Eeuo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost /usr/local/.ghcup \
+                      /opt/hostedtoolcache/CodeQL 2>/dev/null || true
+          sudo docker image prune --all --force 2>/dev/null || true
+          sudo apt-get clean || true
+          echo "=== job start ==="
+          df -h /
+          df -i /
+          free -h
+          nproc
+          uname -m
+
+      # runner 常挂第二块更大的盘在 /mnt；不是每次都有，
+      # 探测后回退到 workspace。源码树与 WSL 树放这里，再 symlink 回来。
+      - name: Choose build root (prefer /mnt)
+        run: |
+          set -Eeuo pipefail
+          ROOT="$GITHUB_WORKSPACE"
+          if mountpoint -q /mnt 2>/dev/null; then
+            AVAIL=$(df -k --output=avail /mnt 2>/dev/null | tail -n1 | tr -d ' ')
+            if [[ "$AVAIL" =~ ^[0-9]+$ ]] && (( AVAIL > 20000000 )); then
+              sudo mkdir -p /mnt/kernel-build
+              sudo chown "$(id -u):$(id -g)" /mnt/kernel-build
+              ROOT=/mnt/kernel-build
+              echo "::notice::使用 /mnt 作为构建根（可用 ${AVAIL} KB）"
+            fi
+          fi
+          mkdir -p "$ROOT/.tmp" "$GITHUB_WORKSPACE/out"
+          echo "BUILD_ROOT=$ROOT" >> "$GITHUB_ENV"
+          echo "TMPDIR=$ROOT/.tmp" >> "$GITHUB_ENV"
+          echo "build root: $ROOT"
+          df -h "$ROOT"
+
+      # 内核链接阶段峰值内存最高。每线程按 ~2GB 预留，取 min(nproc, MemAvailable/2GB)，
+      # 16GB 公开 runner 得 4，7GB 私有 runner 自动降到 3，避免 exit 137。
+      - name: Compute safe job parallelism
+        run: |
+          set -Eeuo pipefail
+          JOBS=$(nproc)
+          MEM_MB=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
+          MEM_JOBS=$(( MEM_MB / 2048 ))
+          if (( MEM_JOBS < 1 )); then MEM_JOBS=1; fi
+          if (( JOBS > MEM_JOBS )); then JOBS=$MEM_JOBS; fi
+          echo "JOBS=$JOBS" >> "$GITHUB_ENV"
+          echo "::notice::make -j${JOBS} (nproc=$(nproc), MemAvailable=${MEM_MB}MB)"
+
+      - name: Install build dependencies
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential cpio debhelper dpkg-dev fakeroot flex \
+            kmod libdw-dev libelf-dev libncurses-dev libssl-dev openssl \
+            python3 rsync xz-utils zstd dwarves file git \
+            curl ca-certificates patch diffutils ccache
+          if [[ "$TOOLCHAIN" == "clang" ]]; then
+            sudo apt-get install -y --no-install-recommends clang lld llvm
+          fi
+
+      - name: Show toolchain versions
+        run: |
+          set -Eeuo pipefail
+          cat /etc/os-release | grep -E '^(NAME|VERSION)=' || true
+          gcc --version | head -n1
+          ld --version | head -n1
+          pahole --version || true
+          zstd --version || true
+          ccache --version | head -n1
+          if [[ "$TOOLCHAIN" == "clang" ]]; then
+            clang --version | head -n1
+            ld.lld --version || true
+          fi
+
+      # 版本号只有一个来源：微软 tag 自己带着内核版本（linux-msft-wsl-6.18.58.1）。
+      # 推导出来写进 $GITHUB_ENV / $GITHUB_OUTPUT，后面所有步骤（含 tag、产物名）
+      # 统一引用，避免同一个版本号在两个地方各写一遍然后对不上。
+      - name: Derive versions
+        id: versions
+        run: |
+          set -Eeuo pipefail
+          WSL_VERSION="${WSL_TAG#linux-msft-wsl-}"
+          if [[ "$WSL_VERSION" == "$WSL_TAG" ]] || \
+             [[ ! "$WSL_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error::$WSL_TAG 不是 linux-msft-wsl-<版本> 形式，无法推导内核版本"
+            exit 1
+          fi
+          KVER="${WSL_VERSION%.*}"
+          if [[ "$TOOLCHAIN" == "clang" ]]; then
+            TOOLCHAIN_LABEL="LLVM $(clang -dumpversion 2>/dev/null || echo '?')"
+          else
+            TOOLCHAIN_LABEL="GCC $(gcc -dumpfullversion 2>/dev/null || gcc -dumpversion)"
+          fi
+          {
+            echo "KVER=$KVER"
+            echo "WSL_VERSION=$WSL_VERSION"
+            echo "TOOLCHAIN_LABEL=$TOOLCHAIN_LABEL"
+          } >> "$GITHUB_ENV"
+          {
+            echo "kver=$KVER"
+            echo "wsl_version=$WSL_VERSION"
+            echo "toolchain_label=$TOOLCHAIN_LABEL"
+          } >> "$GITHUB_OUTPUT"
+          echo "WSL_VERSION=$WSL_VERSION  KVER=$KVER  toolchain=$TOOLCHAIN_LABEL"
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ${{ runner.os }}-${{ runner.arch }}-ccache-${{ env.WSL_TAG }}-${{ env.TOOLCHAIN }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-ccache-${{ env.WSL_TAG }}-${{ env.TOOLCHAIN }}-
+
+      - name: Fetch kernel.org tarball and verify SHA256
+        run: |
+          set -Eeuo pipefail
+          BASE="https://cdn.kernel.org/pub/linux/kernel/v6.x"
+          curl -fL --retry 3 -o "linux-$KVER.tar.xz" "$BASE/linux-$KVER.tar.xz"
+          # sha256sums.asc 是 clearsigned 的，取对应行做完整性校验。
+          # 生产用途请另外用 gpg --verify 验签。
+          if curl -fsL --retry 3 -o sha256sums.asc "$BASE/sha256sums.asc"; then
+            if grep -E "linux-$KVER\.tar\.xz$" sha256sums.asc > expected.sha256; then
+              sha256sum -c expected.sha256
+            else
+              echo "::warning::sha256sums.asc 里没有 $KVER 条目，跳过校验"
+            fi
+          else
+            echo "::warning::无法取得 sha256sums.asc，跳过校验"
+          fi
+          tar -xf "linux-$KVER.tar.xz" -C "$BUILD_ROOT"
+          test -d "$BUILD_ROOT/linux-$KVER"
+          ln -sfn "$BUILD_ROOT/linux-$KVER" "$GITHUB_WORKSPACE/linux-$KVER"
+
+      - name: Fetch Microsoft WSL kernel tree (tag only)
+        run: |
+          set -Eeuo pipefail
+          curl -fL --retry 3 -o msft.tar.gz \
+            "https://github.com/microsoft/WSL2-Linux-Kernel/archive/refs/tags/$WSL_TAG.tar.gz"
+          mkdir -p "$BUILD_ROOT/msft"
+          tar -xzf msft.tar.gz -C "$BUILD_ROOT/msft" --strip-components=1
+          ln -sfn "$BUILD_ROOT/msft" "$GITHUB_WORKSPACE/msft"
+          test -f "$GITHUB_WORKSPACE/msft/drivers/hv/dxgkrnl/Kconfig"
+          # x86 侧不需要补架构层文件：上游的 arch/x86/hyperv 与微软树逐字节一致
+          test -f "$GITHUB_WORKSPACE/msft/include/uapi/misc/d3dkmthk.h"
+          echo "WSL tag: $WSL_TAG"
+          head -n 4 "$GITHUB_WORKSPACE/msft/Makefile" || true
+
+      - name: Use pinned Debian 6.18 baseline config
+        run: |
+          set -Eeuo pipefail
+          cd "$GITHUB_WORKSPACE"
+          test -s "$BASELINE_CONFIG" || {
+            echo "::error::仓库里没有基线 config: $BASELINE_CONFIG"; exit 1; }
+          # 基线必须能对上钉死的 sha256，否则说明文件被换过
+          if [[ -f "$BASELINE_CONFIG.sha256" ]]; then
+            sha256sum -c "$BASELINE_CONFIG.sha256"
+          else
+            echo "::warning::缺少 $BASELINE_CONFIG.sha256，跳过校验"
+          fi
+          cp "$BASELINE_CONFIG" "$GITHUB_WORKSPACE/debian-baseline.config"
+          grep -q '^CONFIG_X86_64=y' "$GITHUB_WORKSPACE/debian-baseline.config"
+          echo "baseline: $BASELINE_CONFIG"
+          grep -E '^(# )?CONFIG_(MTRR|X86_PAT|LOCALVERSION|MODULE_SIG|MODULE_COMPRESS)' \
+            "$GITHUB_WORKSPACE/debian-baseline.config" || true
+
+      - name: Apply Microsoft patches (x86 allowlist)
+        run: |
+          set -Eeuo pipefail
+          SRC="$GITHUB_WORKSPACE/linux-$KVER"
+          bash "$GITHUB_WORKSPACE/scripts/X64/apply-msft-patches.sh" \
+            "$SRC" "$GITHUB_WORKSPACE/msft" "$GITHUB_WORKSPACE/msft-delta.patch"
+          cp "$GITHUB_WORKSPACE/msft-delta.patch" "$GITHUB_WORKSPACE/out/"
+          echo "--- delta stat ---"
+          echo "delta 涉及文件数: $(grep -c '^diff ' "$GITHUB_WORKSPACE/msft-delta.patch" || true)"
+          echo "dxgkrnl 文件数: $(find "$SRC/drivers/hv/dxgkrnl" -type f | wc -l)"
+          echo "drivers/hv 文件数: $(find "$SRC/drivers/hv" -type f | wc -l)"
+
+      - name: Prepare .config
+        run: |
+          set -Eeuo pipefail
+          SRC="$GITHUB_WORKSPACE/linux-$KVER"
+          bash "$GITHUB_WORKSPACE/scripts/X64/prepare-config.sh" \
+            "$SRC" "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/debian-baseline.config" \
+            2>&1 | tee "$GITHUB_WORKSPACE/out/config-report.txt"
+          cp "$SRC/.config" "$GITHUB_WORKSPACE/out/kernel.config"
+          echo "--- key configs ---"
+          grep -E '^(CONFIG_(DXGKRNL|HYPERV|HYPERV_TIMER|MTRR|X86_PAT|ANDROID_BINDER_IPC|DRM|KVM|MODULE_SIG|MODULE_COMPRESS|DEBUG_INFO|IKCONFIG))=' "$SRC/.config" || true
+          grep -E '^# CONFIG_(MODULE_SIG_ALL|MODULE_SIG_FORCE|MODULE_SIG_KEY|MODULE_COMPRESS) is not set' "$SRC/.config" || true
+
+      # 快速探针：只编「微软补丁补出来的」几个对象。缺头文件这类问题会在
+      # 3 分钟内暴露，而不是等 make -j 排队编到那一块才炸（曾白跑 50 分钟）
+      - name: Smoke-compile Hyper-V x86 objects
+        run: |
+          set -Eeuo pipefail
+          SRC="$GITHUB_WORKSPACE/linux-$KVER"
+          cd "$SRC"
+          make -j"$JOBS" ARCH=x86_64 \
+            drivers/clocksource/hyperv_timer.o \
+            drivers/hv/dxgkrnl/dxgmodule.o \
+            arch/x86/kernel/cpu/mshyperv.o
+
+      - name: Build Debian packages
+        run: |
+          set -Eeuo pipefail
+          SRC="$GITHUB_WORKSPACE/linux-$KVER"
+          cd "$SRC"
+          df -h "$BUILD_ROOT"
+          # skipdbg 会被 scripts/package/builddeb 当环境变量读取，必须 export
+          export ARCH LOCALVERSION KDEB_COMPRESS KDEB_PKGVERSION
+          export skipdbg=true
+          ccache -z || true
+          if [[ "$TOOLCHAIN" == "clang" ]]; then
+            make -j"$JOBS" ARCH=x86_64 LLVM=1 "CC=ccache clang" bindeb-pkg
+          else
+            make -j"$JOBS" ARCH=x86_64 "CC=ccache gcc" bindeb-pkg
+          fi
+          ccache -s || true
+          df -h "$BUILD_ROOT"
+
+      - name: Install UAPI headers (contains d3dkmthk.h)
+        run: |
+          set -Eeuo pipefail
+          SRC="$GITHUB_WORKSPACE/linux-$KVER"
+          cd "$SRC"
+          rm -rf "$GITHUB_WORKSPACE/uapi"
+          make ARCH=x86_64 headers_install INSTALL_HDR_PATH="$GITHUB_WORKSPACE/uapi"
+          HDR="$GITHUB_WORKSPACE/uapi/include/misc/d3dkmthk.h"
+          if [[ ! -f "$HDR" ]]; then
+            echo "::warning::headers_install 未导出 d3dkmthk.h，手动补入"
+            mkdir -p "$(dirname "$HDR")"
+            cp "$SRC/include/uapi/misc/d3dkmthk.h" "$HDR"
+          fi
+          tar -cJf "$GITHUB_WORKSPACE/out/linux-uapi-$KVER$LOCALVERSION-amd64.tar.xz" \
+            -C "$GITHUB_WORKSPACE/uapi" .
+
+      - name: Collect and verify artifacts
+        run: |
+          set -Eeuo pipefail
+          shopt -s nullglob
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          # bindeb-pkg 把 .deb 放在**源码树的父目录**。源码树是 $BUILD_ROOT/linux-$KVER
+          # （symlink 回 workspace），父目录就是 $BUILD_ROOT 而不是 workspace——
+          # 以前只在当前目录 glob，源码树落在 /mnt 时一个都收不到。
+          # 两个 glob 会命中同一批文件（源码树是 symlink），按 realpath 去重
+          mapfile -t ALL < <(
+            { ls -1 "$BUILD_ROOT"/*.deb "$GITHUB_WORKSPACE"/*.deb 2>/dev/null || true; } \
+              | xargs -r realpath -m 2>/dev/null | sort -u
+          )
+          if (( ${#ALL[@]} == 0 )); then
+            echo "::error::$BUILD_ROOT 与 $GITHUB_WORKSPACE 下都没有 .deb 产物"
+            find "$BUILD_ROOT" -maxdepth 3 -name '*.deb' || true
+            exit 1
+          fi
+          for f in "${ALL[@]}"; do
+            echo "== $f =="
+            dpkg-deb -f "$f" Package Version Architecture
+            [[ "$(dpkg-deb -f "$f" Architecture)" == "amd64" ]] || {
+              echo "::error::产物不是 amd64: $f"; exit 1; }
+          done
+          # 只发内核本体与头文件：linux-libc-dev 会顶掉发行版的 libc 头文件包，不能装
+          for f in "${ALL[@]}"; do
+            case "$(basename "$f")" in
+              *-dbg*.deb|*-dbgsym*.deb|linux-libc-dev*.deb) continue ;;
+            esac
+            cp -f "$f" "$GITHUB_WORKSPACE/out/"
+          done
+          IMS=("$GITHUB_WORKSPACE"/out/linux-image-*.deb)
+          IMG="${IMS[0]:-}"
+          if [[ -z "$IMG" ]]; then
+            echo "::error::out/ 里没有 linux-image 包"
+            ls -lh "$GITHUB_WORKSPACE/out"
+            exit 1
+          fi
+          # 内建 =y 时不会有 dxgkrnl.ko，改为验证随包发布的 .config
+          # 一次解包，把文件清单和 fsys tar 落到本地文件，后面全部从文件里读。
+          # 以前写的是 `dpkg-deb -c "$IMG" | awk '{...; exit}'`：awk 一 exit 就关管道，
+          # dpkg-deb 内层 tar 还在写 → `tar: stdout: write error` → 配合 pipefail 直接判失败。
+          # 产物本身没问题，是断言把自己绊倒的。
+          dpkg-deb --fsys-tarfile "$IMG" > /tmp/img.tar
+          tar -tf /tmp/img.tar > /tmp/fslist.txt
+          CFG=$(grep -E '/boot/config-' /tmp/fslist.txt | head -n1 || true)
+          [[ -n "$CFG" ]] || { echo "::error::镜像包里没有 /boot/config-*"; exit 1; }
+          tar -xOf /tmp/img.tar "$CFG" > /tmp/packed.config
+          grep -qx 'CONFIG_DXGKRNL=y' /tmp/packed.config
+          grep -qx 'CONFIG_HYPERV=y' /tmp/packed.config
+          grep -qx 'CONFIG_MTRR=y' /tmp/packed.config
+          grep -qx 'CONFIG_X86_PAT=y' /tmp/packed.config
+          grep -qx 'CONFIG_MODULE_SIG=y' /tmp/packed.config
+          ! grep -q '^CONFIG_MODULE_SIG_ALL=y' /tmp/packed.config
+          echo "OK: DXGKRNL / HYPERV / MTRR+PAT / MODULE_SIG(+SIG_ALL=n) 均在 $CFG"
+
+          # 「构建期不签名」是整个本地补签方案的前提，必须能验证：
+          # 随便抽一个 .ko，签名者必须为空（已签的 .ko 无法再叠加签名）
+          # 只抽第一个 .ko：tar -xO 配通配符会把**所有**模块拼进同一个文件，
+          # modinfo 面对这种拼接体读不出可信结果，断言就成了摆设。
+          KOPATH=$(grep -m1 '\.ko$' /tmp/fslist.txt || true)
+          if [[ -n "$KOPATH" ]]; then
+            tar -xOf /tmp/img.tar "$KOPATH" > /tmp/probe.ko
+            SIGNER=$(modinfo -F signer /tmp/probe.ko 2>/dev/null || true)
+            if [[ -n "$SIGNER" ]]; then
+              echo "::error::模块在构建期就被签名了（signer=$SIGNER），本地无法再补签"
+              exit 1
+            fi
+            echo "OK: 模块未签名，本地可用 MOK 补签"
+          else
+            echo "::warning::没抽到 .ko，跳过「未签名」断言"
+          fi
+          test -f "$GITHUB_WORKSPACE/linux-$KVER/arch/x86/boot/bzImage"
+          # 附件里有什么就校验什么：kernel.config 与 msft-delta.patch 也是发布资产，
+          # 只 glob *.deb/*.tar.xz 会让这两份「看得见但验不了」。
+          ( cd "$GITHUB_WORKSPACE/out" && sha256sum ./*.deb ./*.tar.xz ./kernel.config ./msft-delta.patch > SHA256SUMS && cat SHA256SUMS )
+          ls -lh "$GITHUB_WORKSPACE/out"
+
+      # Release note 只放这一张表。产物在附件里、安装说明在 README 里，这里不重复。
+      - name: Write release notes
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          {
+            echo "## Hyperv-DXG-${ARCH_LABEL}-Kernel v${WSL_VERSION:-unknown}"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| kernel.org | v${KVER:-unknown} |"
+            echo "| WSL tag | ${WSL_TAG} |"
+            echo "| 基线 config | ${BASELINE_LABEL} |"
+            echo "| LOCALVERSION | ${LOCALVERSION} |"
+            echo "| 工具链 / runner | ${TOOLCHAIN_LABEL:-$TOOLCHAIN} / ${RUNNER_LABEL} |"
+          } > "$GITHUB_WORKSPACE/out/release-notes.md"
+          cat "$GITHUB_WORKSPACE/out/release-notes.md"
+
+      - name: Write build summary
+        if: always()
+        run: |
+          {
+            echo "## 内核构建摘要"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| kernel.org | \`v$KVER\` |"
+            echo "| WSL tag | \`$WSL_TAG\` |"
+            echo "| 基线 config | \`$BASELINE_CONFIG\` |"
+            echo "| LOCALVERSION | \`$LOCALVERSION\` |"
+            echo "| 工具链 | \`$TOOLCHAIN\` |"
+            echo ""
+            echo "### 从微软树搬入 / 改写的文件"
+            echo '```'
+            grep '^diff ' "$GITHUB_WORKSPACE/msft-delta.patch" 2>/dev/null \
+              | sed 's/^diff -ruN a\///; s/ b\/.*$//' || echo "(无)"
+            echo '```'
+            echo "### 配置报告（基线丢符号 / fragment 未生效）"
+            echo '```'
+            cat "$GITHUB_WORKSPACE/out/config-report.txt" 2>/dev/null || echo "(无)"
+            echo '```'
+            echo "### 产物 SHA256"
+            echo '```'
+            cat "$GITHUB_WORKSPACE/out/SHA256SUMS" 2>/dev/null || echo "(尚未生成)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # 137 与 No space left on device 占 CI 失败的大头，日志里直接给证据
+      - name: Diagnostics (always)
+        if: always()
+        run: |
+          echo "=== disk ==="; df -h / /mnt 2>/dev/null || true
+          echo "=== inodes ==="; df -i / 2>/dev/null || true
+          echo "=== memory ==="; free -h || true
+          echo "=== OOM kills ==="
+          sudo journalctl -k --since "-60 min" --no-pager 2>/dev/null \
+            | grep -i "out of memory" || echo "(none / journald unavailable)"
+          echo "=== ccache ==="; ccache -s || true
+          echo "=== out/ ==="; ls -lh "$GITHUB_WORKSPACE/out/" || true
+
+      - name: Save ccache
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ${{ runner.os }}-${{ runner.arch }}-ccache-${{ env.WSL_TAG }}-${{ env.TOOLCHAIN }}-${{ github.run_id }}
+
+      - name: Free build tree before upload
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          ROOT="${BUILD_ROOT:-$GITHUB_WORKSPACE}"
+          make -C "$GITHUB_WORKSPACE/linux-$KVER" ARCH=x86_64 clean >/dev/null 2>&1 || true
+          rm -rf "$ROOT/linux-$KVER" "$ROOT/msft" \
+                 "$GITHUB_WORKSPACE/msft" "$GITHUB_WORKSPACE/linux-$KVER" \
+                 "$GITHUB_WORKSPACE/msft.tar.gz" "$GITHUB_WORKSPACE/linux-$KVER.tar.xz" \
+                 "$GITHUB_WORKSPACE/uapi" "$GITHUB_WORKSPACE/debian-baseline.config"
+          df -h /
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ steps.versions.outputs.kver }}${{ env.LOCALVERSION }}-${{ env.ARCH_LABEL }}-deb
+          path: ${{ github.workspace }}/out/
+          retention-days: 30
+          if-no-files-found: error
+
+      # 推 tag 触发时用 tag 名；手动 dispatch 勾了 make_release 时，
+      # 由这次构建自己建 tag + Release——不再为了一个 tag 重编一遍内核。
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || inputs.make_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.versions.outputs.wsl_version }}-x64
+          name: Hyperv-DXG-${{ env.ARCH_LABEL }}-Kernel v${{ steps.versions.outputs.wsl_version }}
+          body_path: ${{ github.workspace }}/out/release-notes.md
+          files: |
+            ${{ github.workspace }}/out/*.deb
+            ${{ github.workspace }}/out/*.tar.xz
+            ${{ github.workspace }}/out/SHA256SUMS
+            ${{ github.workspace }}/out/kernel.config
+            ${{ github.workspace }}/out/msft-delta.patch

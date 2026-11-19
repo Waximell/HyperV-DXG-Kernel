@@ -7,10 +7,13 @@ name: Build Kernel + dxgkrnl (ARM64 Debian .deb)
 # 不写死在 YAML 里：
 #   vars.WSL_TAG          微软 tag；内核版本号由它推导
 #                         （linux-msft-wsl-6.18.58.1 -> WSL_VERSION 6.18.58.1 / KVER 6.18.58）
-#   vars.BASELINE_CONFIG  基线 config 路径
+#   vars.LOCALVERSION     内核版本后缀（默认 -hyperv-dxg）
+#   vars.ARM64_BASELINE_CONFIG  基线 config 路径
 #   vars.BASELINE_LABEL   基线 config 的展示名（会进 Release note）
-#   vars.RUNNER           runner label（默认 ubuntu-26.04-arm）
-#   vars.ARCH_LABEL       Release 标题里的架构后缀（默认 ARM64）
+#   vars.ARM64_RUNNER     runner label（默认 ubuntu-26.04-arm）
+#   vars.ARM64_ARCH_LABEL Release 标题里的架构后缀（默认 ARM64）
+# 架构相关的变量带 ARM64_ / X64_ 前缀：两个 workflow 共用同一个仓库的变量表，
+# 不前缀就会互相踩（arm64 把 BASELINE_CONFIG 指到 amd64 的基线上）。
 # 巨硬发新版时只改这几个变量，不必改这个文件。
 #
 # 从 WSL 树里只取 Hyper-V 侧真正需要的路径：
@@ -41,7 +44,7 @@ on:
       baseline_config:
         description: '仓库内的 Debian 基线 config（改基线只改这个文件）'
         required: true
-        default: 'config/debian-6.18.15-arm64.config'
+        default: 'config/ARM64/debian-6.18.15-arm64.config'
       toolchain:
         description: '编译工具链（26.04: GCC 15.2 / LLVM 21 + lld）'
         required: true
@@ -76,17 +79,17 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ${{ vars.RUNNER || 'ubuntu-26.04-arm' }}
+    runs-on: ${{ vars.ARM64_RUNNER || 'ubuntu-26.04-arm' }}
     timeout-minutes: 360
     env:
       # KVER / WSL_VERSION / TOOLCHAIN_LABEL 不在这里：它们由 WSL_TAG 与实测工具链
       # 在「Derive versions」步推导后写进 $GITHUB_ENV（见该步）。
       WSL_TAG: ${{ inputs.wsl_tag || vars.WSL_TAG || 'linux-msft-wsl-6.18.58.1' }}
       LOCALVERSION: ${{ inputs.localversion || vars.LOCALVERSION || '-hyperv-dxg' }}
-      BASELINE_CONFIG: ${{ inputs.baseline_config || vars.BASELINE_CONFIG || 'config/debian-6.18.15-arm64.config' }}
+      BASELINE_CONFIG: ${{ inputs.baseline_config || vars.ARM64_BASELINE_CONFIG || 'config/ARM64/debian-6.18.15-arm64.config' }}
       BASELINE_LABEL: ${{ vars.BASELINE_LABEL || 'Debian 6.18.15 arm64（trixie-backports）' }}
-      ARCH_LABEL: ${{ vars.ARCH_LABEL || 'ARM64' }}
-      RUNNER_LABEL: ${{ vars.RUNNER || 'ubuntu-26.04-arm' }}
+      ARCH_LABEL: ${{ vars.ARM64_ARCH_LABEL || 'ARM64' }}
+      RUNNER_LABEL: ${{ vars.ARM64_RUNNER || 'ubuntu-26.04-arm' }}
       TOOLCHAIN: ${{ inputs.toolchain || 'gcc' }}
       EXTRA_MSFT_PATHS: ${{ inputs.extra_msft_paths || '' }}
       KDEB_COMPRESS: zstd
@@ -280,7 +283,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           SRC="$GITHUB_WORKSPACE/linux-$KVER"
-          bash "$GITHUB_WORKSPACE/scripts/apply-msft-patches.sh" \
+          bash "$GITHUB_WORKSPACE/scripts/ARM64/apply-msft-patches.sh" \
             "$SRC" "$GITHUB_WORKSPACE/msft" "$GITHUB_WORKSPACE/msft-delta.patch"
           cp "$GITHUB_WORKSPACE/msft-delta.patch" "$GITHUB_WORKSPACE/out/"
           echo "--- delta stat ---"
@@ -292,7 +295,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           SRC="$GITHUB_WORKSPACE/linux-$KVER"
-          bash "$GITHUB_WORKSPACE/scripts/prepare-config.sh" \
+          bash "$GITHUB_WORKSPACE/scripts/ARM64/prepare-config.sh" \
             "$SRC" "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/debian-baseline.config" \
             2>&1 | tee "$GITHUB_WORKSPACE/out/config-report.txt"
           cp "$SRC/.config" "$GITHUB_WORKSPACE/out/kernel.config"
