@@ -22,7 +22,7 @@
 
 ## 在 8CX Gen3 设备测试
 
-Debian forky aarch64，Hyper-V Gen2 来宾，Secure Boot 开启（内核与模块均用自签 MOK 签名）：
+Debian forky aarch64：
 
 ![8CX Gen3 上的 fastfetch](docs/8cx-gen3-fastfetch.png)
 
