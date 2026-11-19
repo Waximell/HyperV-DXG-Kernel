@@ -7,8 +7,8 @@
 # 拆分包，只能从内核镜像包里抽 /boot/config-*。
 #
 # 用法:
-#   scripts/update-baseline-config.sh [输出路径]
-#   scripts/update-baseline-config.sh --deb=/path/to/linux-image-*.deb [输出路径]
+#   scripts/ARM64/update-baseline-config.sh [输出路径]
+#   scripts/ARM64/update-baseline-config.sh --deb=/path/to/linux-image-*.deb [输出路径]
 #
 # 一次下载约 92 MB（linux-image-6.18.15+deb13-arm64）。只想校验已有快照就别跑它。
 set -Eeuo pipefail
