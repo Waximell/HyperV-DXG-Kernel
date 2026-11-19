@@ -6,17 +6,17 @@
 
 ## 对 Debian 默认配置改动
 
-| 项                                                | Debian 默认           | 本仓库                           | 修改目的                        |
-| ------------------------------------------------ | ------------------- | ----------------------------- | --------------------------- |
-| `MODULE_SIG_ALL`                                 | 无此行（Kconfig 默认 `y`） | 显式关闭                          | 构建期不签名，以便按需自行签名             |
-| `MODULE_COMPRESS`                                | `y`（XZ）             | 不压缩                           | 未压缩的 `.ko` 可直接 `sign-file`  |
-| `DEBUG_INFO` / `DEBUG_INFO_BTF`                  | `y`                 | 关闭                            | 虚拟机来宾系统不需要调试信息              |
-| `SYSTEM_TRUSTED_KEYS` / `SYSTEM_REVOCATION_KEYS` | 无此行（默认空串）           | 显式置空                          | 防止基线或构建环境带入 Debian 证书链      |
-| `HYPERV_UTILS` / `BALLOON` / `STORAGE` / `NET`   | `=m`                | `=y`                          | 避免跨发行版 initramfs 模块加载顺序带来影响 |
-| `DXGKRNL`                                        | 无此驱动                | `=y`                          | 本仓库实际工作                     |
-| `ANDROID_BINDER_IPC` / `ANDROID_BINDERFS`        | `=m` / 关闭           | `=y` / `=y`                   | Waydroid 相关                 |
-| `ANDROID_BINDER_DEVICES`                         | `"binder"`          | `"binder,hwbinder,vndbinder"` | Waydroid 相关                 |
-| `LOCALVERSION`                                   | `""`                | `-hyperv-dxg`                 | 与发行版内核共存                    |
+| 项                                                | Debian 默认           | 本仓库                           | 修改目的                                        |
+| ------------------------------------------------ | ------------------- | ----------------------------- | ------------------------------------------- |
+| `MODULE_SIG_ALL`                                 | 无此行（Kconfig 默认 `y`） | 显式关闭                          | 构建期不签名，以便按需自行签名                             |
+| `MODULE_COMPRESS`                                | `y`（XZ）             | 不压缩                           | 未压缩的 `.ko` 可直接 `sign-file`                  |
+| `DEBUG_INFO_BTF`                                 | `y`                 | 关闭                            | 虚拟机来宾不需要                                    |
+| `SYSTEM_TRUSTED_KEYS` / `SYSTEM_REVOCATION_KEYS` | 无此行（默认空串）           | 显式置空                          | 避免带入 Debian 证书链 |
+| `HYPERV_UTILS` / `BALLOON` / `STORAGE` / `NET`   | `=m`                | `=y`                          | 避免跨发行版 initramfs 模块加载顺序带来影响                 |
+| `DXGKRNL`                                        | 无此驱动                | `=y`                          | 本仓库实际工作                                     |
+| `ANDROID_BINDER_IPC` / `ANDROID_BINDERFS`        | `=m` / 关闭           | `=y` / `=y`                   | Waydroid 相关                                 |
+| `ANDROID_BINDER_DEVICES`                         | `"binder"`          | `"binder,hwbinder,vndbinder"` | Waydroid 相关                                 |
+| `LOCALVERSION`                                   | `""`                | `-hyperv-dxg`                 | 与发行版内核共存                                    |
 
 ## 
 
