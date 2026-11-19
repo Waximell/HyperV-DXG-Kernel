@@ -20,6 +20,12 @@
 
 ## 
 
+## AMD64 平台 NVIDIA GeForce RTX 3060 Laptop GPU 测试
+
+Ubuntu 26.04.1 LTS (Resolute Raccoon) x86_64：
+
+![AMD64 平台 fastfetch](docs/amd64-rtx3060-fastfetch.png)
+
 ## 在 8CX Gen3 设备测试
 
 Debian forky aarch64：
